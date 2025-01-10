@@ -1,0 +1,64 @@
+version: "3.8"
+
+services:
+  app:
+    image: nocobase/nocobase:latest
+    networks:
+      - internal
+    depends_on:
+      - postgres
+    environment:
+      APP_KEY: "your-secret-key"
+      DB_DIALECT: "postgres"
+      DB_HOST: "postgres"
+      DB_DATABASE: "${DB_NAME}"
+      DB_USER: "${DB_USER}"
+      DB_PASSWORD: "${DB_PASSWORD}"
+      TZ: "Asia/Shanghai"
+    volumes:
+      - ./storage:/app/nocobase/storage
+    ports:
+      - "13000:80"
+
+  postgres:
+    image: postgres:16
+    restart: always
+    command: postgres -c wal_level=logical
+    environment:
+      POSTGRES_USER: "${DB_USER}"
+      POSTGRES_DB: "${DB_NAME}"
+      POSTGRES_PASSWORD: "${DB_PASSWORD}"
+    volumes:
+      - ./storage/db/postgres:/var/lib/postgresql/data
+    networks:
+      - internal
+
+  story-graph-api:
+    build: ./server
+    container_name: story-graph-api
+    restart: always
+    depends_on:
+      - postgres
+    ports:
+      - "3001:3000"
+    environment:
+      PG_USER: "${DB_READONLY_USER}"
+      PG_PASSWORD: "${DB_READONLY_PASS}"
+      PG_HOST: "postgres"
+      PG_DATABASE: "${DB_NAME}"
+    networks:
+      - internal
+
+  story-graph-web:
+    image: nginx
+    container_name: story-graph-web
+    volumes:
+      - ./app:/usr/share/nginx/html
+    ports:
+      - "9090:80"
+    networks:
+      - internal
+
+networks:
+  internal:
+    driver: bridge
