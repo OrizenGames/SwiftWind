@@ -67,7 +67,7 @@
       }
 
       try {
-        let response = await fetch(`${API_BASE_URL}/${storyLineId}`);
+        let response = await fetch(`${API_BASE_URL}/story-graph/${storyLineId}`);
         if (!response.ok) {
           throw new Error(`HTTP error! 狀態碼: ${response.status}`);
         }
