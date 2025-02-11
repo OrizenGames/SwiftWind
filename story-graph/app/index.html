@@ -3,36 +3,52 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>劇情視覺化</title>
+  <title>劇情節點-流程圖</title>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/cytoscape/3.23.0/cytoscape.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/dagre/0.8.5/dagre.min.js"></script>
+  <script src="https://unpkg.com/cytoscape-dagre/cytoscape-dagre.js"></script>
   <style>
     html, body {
       margin: 0;
       padding: 0;
       width: 100%;
       height: 100%;
-      overflow: hidden;
+      background-color: #f8f9fa;
       display: flex;
       flex-direction: column;
     }
     #title {
-      text-align: center;
+      text-align: left;
       font-size: 20px;
       font-weight: bold;
       padding: 10px;
-      background-color: #f8f9fa;
-      border-bottom: 1px solid #ccc;
+      background-color: white;
+      color: #2a3d3d;
+      border-bottom: 2px solid #ccc;
     }
     #cy {
       flex-grow: 1;
       width: 100%;
       height: 100%;
+      padding: 20px;
+      box-sizing: border-box;
+    }
+    .tooltip {
+      position: absolute;
+      background: rgba(0, 0, 0, 0.75);
+      color: white;
+      padding: 8px;
+      border-radius: 5px;
+      font-size: 14px;
+      display: none;
+      pointer-events: none;
     }
   </style>
 </head>
 <body>
   <div id="title">載入中...</div>
   <div id="cy"></div>
+  <div class="tooltip" id="tooltip"></div>
 
   <script>
     function getQueryParam(name) {
@@ -59,43 +75,106 @@
         let data = await response.json();
 
         if (data.storyLine) {
-          document.getElementById("title").innerText = `${data.storyLine.story_line_id} - ${data.storyLine.title}`;
+          document.getElementById("title").innerText = `${data.storyLine.pipeline_id} - ${data.storyLine.story_line_id} - ${data.storyLine.title}`;
         } else {
           document.getElementById("title").innerText = "❌ 劇情線不存在";
           return;
         }
 
+        let elements = data.elements.map(node => ({
+          data: {
+            id: node.data.id,
+            node_label: `${node.data.index}\n${node.data.name.length > 12 ? node.data.name.substring(0, 12) + "..." : node.data.name}`,
+            description: node.data.description
+          }
+        })).concat(
+          data.elements
+            .filter(node => node.data.source && node.data.target)
+            .map(edge => ({
+              data: {
+                id: edge.data.id,
+                source: edge.data.source,
+                target: edge.data.target
+              }
+            }))
+        );
+
         let cy = cytoscape({
           container: document.getElementById("cy"),
-          elements: data.elements,
+          elements: elements,
           style: [
             {
               selector: "node",
               style: {
-                "background-color": "#007bff",
-                "color": "#fff",
-                "shape": "roundrectangle",
+                "background-color": "#c4d8d7",
+                "color": "#2a3d3d",
+                "shape": "ellipse",
                 "text-valign": "center",
                 "text-halign": "center",
-                "padding": "10px",
-                "width": "250px",
-                "height": "auto",
+                "border-width": "2px",
+                "border-color": "#2a3d3d",
+                "width": "100px",
+                "height": "100px",
+                "font-size": "14px",
+                "font-weight": "bold",
                 "text-wrap": "wrap",
-                "label": "data(label)"
+                "label": "data(node_label)"
               }
             },
             {
               selector: "edge",
               style: {
-                "width": 2,
-                "line-color": "#333",
+                "width": 3,
+                "line-color": "#2a3d3d",
                 "target-arrow-shape": "triangle",
+                "target-arrow-color": "#2a3d3d",
                 "curve-style": "bezier"
               }
             }
           ],
-          layout: { name: "dagre" }
+          layout: {
+            name: "dagre",
+            rankDir: "LR",
+            nodeSep: 200,
+            edgeSep: 100,
+            rankSep: 150
+          },
+          userPanningEnabled: false,
+          userZoomingEnabled: false,
+          boxSelectionEnabled: false
         });
+
+        cy.nodes().forEach(node => {
+          node.grabbable(false);
+          node.selectable(false);
+        });
+
+        const tooltip = document.getElementById("tooltip");
+
+        cy.on("mouseover", "node", function (event) {
+          const node = event.target;
+          const description = node.data("description");
+          if (description) {
+            tooltip.innerText = description;
+            tooltip.style.display = "block";
+          }
+        });
+
+        cy.on("mousemove", function (event) {
+          tooltip.style.left = event.originalEvent.clientX + 10 + "px";
+          tooltip.style.top = event.originalEvent.clientY + 10 + "px";
+        });
+
+        cy.on("mouseout", "node", function () {
+          tooltip.style.display = "none";
+        });
+
+        function resizeGraph() {
+          cy.resize();
+          cy.fit();
+        }
+        window.addEventListener("resize", resizeGraph);
+        resizeGraph();
 
       } catch (error) {
         console.error("❌ API 讀取失敗", error);
