@@ -57,17 +57,22 @@ app.get("/story-graph/:story_line_id", async (req, res) => {
       return res.status(400).json({ error: "Invalid story_line_id." });
     }
 
-    const storyLineQueryText = "SELECT * FROM story_lines WHERE story_line_id = $1";
-    const storyLineQuery = await client.query(storyLineQueryText, [storyLineId]);
+    // 1. 查詢該劇情線及其開始節點
+    const storyLineQuery = await client.query(
+      `SELECT sl.*, sn.* 
+       FROM story_lines sl
+       LEFT JOIN story_nodes sn ON sn.id = sl.fk_story_lines_start_node_id_story_nodes
+       WHERE sl.story_line_id = $1`,
+      [storyLineId]
+    );
 
     if (storyLineQuery.rows.length === 0) {
       return res.status(404).json({ error: "Storyline not found" });
     }
 
-    const startNodeId = storyLineQuery.rows[0].fk_story_lines_start_node_id_story_nodes;
-
+    const startNode = storyLineQuery.rows[0];
     let elements = [];
-    let queue = [startNodeId];
+    let queue = [startNode.id];
     let visited = new Set();
 
     while (queue.length > 0) {
@@ -75,42 +80,62 @@ app.get("/story-graph/:story_line_id", async (req, res) => {
       if (visited.has(nodeId)) continue;
       visited.add(nodeId);
 
-      const nodeQueryText = "SELECT * FROM story_nodes WHERE id = $1";
-      const nodeQuery = await client.query(nodeQueryText, [nodeId]);
+      // 2. 查詢該節點的後續節點
+      const nodeQuery = await client.query(
+        `SELECT * 
+         FROM story_nodes 
+         WHERE fk_storyline_storynode = (
+           SELECT id FROM story_lines WHERE story_line_id = $1
+         )
+         AND (next_node_id IS NOT NULL OR branch_nodes IS NOT NULL)`,
+        [storyLineId]
+      );
 
-      if (nodeQuery.rows.length === 0) continue;
-      const node = nodeQuery.rows[0];
-
-      elements.push({
-        data: {
-          id: `N${node.id}`,
-          name: node.title,
-          description: node.description
-        }
-      });
-
-      if (node.next_node_id) {
+      nodeQuery.rows.forEach((node) => {
         elements.push({
           data: {
-            id: `E${node.id}-${node.next_node_id}`,
-            source: `N${node.id}`,
-            target: `N${node.next_node_id}`
+            id: `N${node.id}`,
+            name: node.title,
+            description: node.description
           }
         });
-        queue.push(node.next_node_id);
-      }
+
+        if (node.next_node_id) {
+          elements.push({
+            data: {
+              id: `E${node.id}-${node.next_node_id}`,
+              source: `N${node.id}`,
+              target: `N${node.next_node_id}`
+            }
+          });
+          queue.push(node.next_node_id);
+        }
+
+        if (node.branch_nodes) {
+          const branches = JSON.parse(node.branch_nodes);
+          branches.forEach((branchNodeId) => {
+            elements.push({
+              data: {
+                id: `E${node.id}-${branchNodeId}`,
+                source: `N${node.id}`,
+                target: `N${branchNodeId}`
+              }
+            });
+            queue.push(branchNodeId);
+          });
+        }
+      });
     }
 
-    const responsePayload = {
+    res.json({
       storyLine: {
         story_line_id: storyLineQuery.rows[0].story_line_id,
         title: storyLineQuery.rows[0].title
       },
       elements
-    };
-
-    res.json(responsePayload);
+    });
   } catch (error) {
+    console.error("Error:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
