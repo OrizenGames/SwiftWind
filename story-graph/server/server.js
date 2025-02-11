@@ -7,7 +7,6 @@ const app = express();
 const port = 3000;
 
 const allowedOrigins = ["https://admin.spiritbrewgame.com"];
-
 const corsOptions = {
   origin: function (origin, callback) {
     if (!origin || allowedOrigins.includes(origin)) {
@@ -49,6 +48,7 @@ client
     process.exit(1);
   });
 
+// API：根據劇情線 ID 取得流程圖資料（包含分支）
 app.get("/story-graph/:story_line_id", async (req, res) => {
   try {
     const storyLineId = req.params.story_line_id.trim();
@@ -57,9 +57,12 @@ app.get("/story-graph/:story_line_id", async (req, res) => {
       return res.status(400).json({ error: "Invalid story_line_id." });
     }
 
-    // 1. 查詢該劇情線及其開始節點
+    // 1. 取得劇情線與其開始節點資訊
     const storyLineQuery = await client.query(
-      `SELECT sl.*, sn.* 
+      `SELECT sl.*, 
+              sn.id AS start_node_id, 
+              sn.title AS start_node_title, 
+              sn.description AS start_node_description
        FROM story_lines sl
        LEFT JOIN story_nodes sn ON sn.id = sl.fk_story_lines_start_node_id_story_nodes
        WHERE sl.story_line_id = $1`,
@@ -70,67 +73,124 @@ app.get("/story-graph/:story_line_id", async (req, res) => {
       return res.status(404).json({ error: "Storyline not found" });
     }
 
-    const startNode = storyLineQuery.rows[0];
+    const storyLine = storyLineQuery.rows[0];
+    const startNodeId = storyLine.start_node_id;
+    if (!startNodeId) {
+      return res.status(404).json({ error: "Start node not found for this storyline" });
+    }
+
     let elements = [];
-    let queue = [startNode.id];
+    let queue = [startNodeId];
     let visited = new Set();
 
-    while (queue.length > 0) {
-      let nodeId = queue.shift();
-      if (visited.has(nodeId)) continue;
-      visited.add(nodeId);
+    // 將開始節點加入元素清單
+    elements.push({
+      data: {
+        id: `N${startNodeId}`,
+        name: storyLine.start_node_title,
+        description: storyLine.start_node_description
+      }
+    });
 
-      // 2. 查詢該節點的後續節點
+    // 使用 BFS 依序查詢每個節點的連接
+    while (queue.length > 0) {
+      const currentId = queue.shift();
+      if (visited.has(currentId)) continue;
+      visited.add(currentId);
+
+      // 取得該節點的詳細資訊（包含連接資訊）
       const nodeQuery = await client.query(
-        `SELECT * 
-         FROM story_nodes 
-         WHERE fk_storyline_storynode = (
-           SELECT id FROM story_lines WHERE story_line_id = $1
-         )
-         AND (next_node_id IS NOT NULL OR branch_nodes IS NOT NULL)`,
-        [storyLineId]
+        `SELECT id, title, description, next_node_id, branch_nodes
+         FROM story_nodes
+         WHERE id = $1 AND fk_storyline_storynode = (
+           SELECT id FROM story_lines WHERE story_line_id = $2
+         )`,
+        [currentId, storyLineId]
       );
 
-      nodeQuery.rows.forEach((node) => {
+      if (nodeQuery.rows.length === 0) continue;
+      const node = nodeQuery.rows[0];
+
+      // 若有 next_node_id，建立連接邊並將目標節點加入待查詢佇列
+      if (node.next_node_id) {
         elements.push({
           data: {
-            id: `N${node.id}`,
-            name: node.title,
-            description: node.description
+            id: `E${node.id}-${node.next_node_id}`,
+            source: `N${node.id}`,
+            target: `N${node.next_node_id}`
           }
         });
-
-        if (node.next_node_id) {
-          elements.push({
-            data: {
-              id: `E${node.id}-${node.next_node_id}`,
-              source: `N${node.id}`,
-              target: `N${node.next_node_id}`
-            }
-          });
+        if (!visited.has(node.next_node_id)) {
           queue.push(node.next_node_id);
-        }
-
-        if (node.branch_nodes) {
-          const branches = JSON.parse(node.branch_nodes);
-          branches.forEach((branchNodeId) => {
+          // 為避免重複查詢，嘗試先取得目標節點基本資料
+          const nextNodeQuery = await client.query(
+            `SELECT id, title, description FROM story_nodes WHERE id = $1`,
+            [node.next_node_id]
+          );
+          if (nextNodeQuery.rows.length > 0) {
+            const nextNode = nextNodeQuery.rows[0];
             elements.push({
               data: {
-                id: `E${node.id}-${branchNodeId}`,
-                source: `N${node.id}`,
-                target: `N${branchNodeId}`
+                id: `N${nextNode.id}`,
+                name: nextNode.title,
+                description: nextNode.description
               }
             });
-            queue.push(branchNodeId);
+          }
+        }
+      }
+
+      // 處理分支連接：假設 branch_nodes 為 JSON 字串，格式例如 "[3,4]"
+      if (node.branch_nodes) {
+        let branchArray = [];
+        try {
+          branchArray = JSON.parse(node.branch_nodes);
+        } catch (err) {
+          console.error("Error parsing branch_nodes for node", node.id, err);
+        }
+        if (Array.isArray(branchArray)) {
+          branchArray.forEach((branchId) => {
+            elements.push({
+              data: {
+                id: `E${node.id}-${branchId}`,
+                source: `N${node.id}`,
+                target: `N${branchId}`
+              }
+            });
+            if (!visited.has(branchId)) {
+              queue.push(branchId);
+              // 嘗試先取得分支節點資料
+              // 注意：這裡不檢查 fk_storyline_storynode，假設資料完整
+              client.query(
+                `SELECT id, title, description FROM story_nodes WHERE id = $1`,
+                [branchId]
+              ).then((branchNodeQuery) => {
+                if (branchNodeQuery.rows.length > 0) {
+                  const branchNode = branchNodeQuery.rows[0];
+                  // 避免重複加入節點資料
+                  if (!elements.find(el => el.data.id === `N${branchNode.id}`)) {
+                    elements.push({
+                      data: {
+                        id: `N${branchNode.id}`,
+                        name: branchNode.title,
+                        description: branchNode.description
+                      }
+                    });
+                  }
+                }
+              }).catch((err) => {
+                console.error("Error querying branch node", branchId, err);
+              });
+            }
           });
         }
-      });
+      }
     }
 
     res.json({
       storyLine: {
-        story_line_id: storyLineQuery.rows[0].story_line_id,
-        title: storyLineQuery.rows[0].title
+        story_line_id: storyLine.story_line_id,
+        title: storyLine.title
       },
       elements
     });

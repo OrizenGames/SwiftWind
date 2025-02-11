@@ -55,30 +55,71 @@
       }
 
       try {
-        let response = await fetch(`${API_BASE_URL}/story-graph/${storyLineId}`);
+        const response = await fetch(`${API_BASE_URL}/story-graph/${storyLineId}`);
         if (!response.ok) {
           throw new Error(`HTTP error! 狀態碼: ${response.status}`);
         }
-        let data = await response.json();
+        const data = await response.json();
 
         document.getElementById("title").innerText = data.storyLine?.title || "❌ 劇情線不存在";
 
-        let elements = data.elements.map(el => ({
-          data: {
-            id: el.data.id,
-            label: el.data.name.length > 12 ? el.data.name.substring(0, 12) + "..." : el.data.name,
-            description: el.data.description
+        const elements = data.elements.map(el => {
+          if (el.data.source && el.data.target) {
+            return {
+              data: {
+                id: el.data.id,
+                source: el.data.source,
+                target: el.data.target
+              }
+            };
+          } else {
+            const name = el.data.name || "";
+            return {
+              data: {
+                id: el.data.id,
+                label: name.length > 12 ? name.substring(0, 12) + "..." : name,
+                description: el.data.description
+              }
+            };
           }
-        }));
-
-        let cy = cytoscape({
-          container: document.getElementById("cy"),
-          elements: elements,
-          layout: { name: "dagre", rankDir: "LR" },
-          style: [{ selector: "node", style: { "label": "data(label)" } }]
         });
 
+        const cy = cytoscape({
+          container: document.getElementById("cy"),
+          elements: elements,
+          layout: {
+            name: "dagre",
+            rankDir: "LR"
+          },
+          style: [
+            {
+              selector: "node",
+              style: {
+                "label": "data(label)",
+                "text-valign": "center",
+                "color": "#fff",
+                "background-color": "#0074D9",
+                "text-outline-width": 2,
+                "text-outline-color": "#0074D9",
+                "width": "label",
+                "height": "label",
+                "padding": "10px"
+              }
+            },
+            {
+              selector: "edge",
+              style: {
+                "curve-style": "bezier",
+                "target-arrow-shape": "triangle",
+                "line-color": "#ccc",
+                "target-arrow-color": "#ccc",
+                "width": 2
+              }
+            }
+          ]
+        });
       } catch (error) {
+        console.error("Error loading story graph:", error);
         document.getElementById("title").innerText = "❌ 無法載入劇情線";
       }
     }
