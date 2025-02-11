@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>劇情節點-流程圖</title>
+  <title>劇情視覺化 - 百味靈飲</title>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/cytoscape/3.23.0/cytoscape.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/dagre/0.8.5/dagre.min.js"></script>
   <script src="https://unpkg.com/cytoscape-dagre/cytoscape-dagre.js"></script>
@@ -19,18 +19,18 @@
     }
     #title {
       text-align: left;
-      font-size: 20px;
+      font-size: 22px;
       font-weight: bold;
-      padding: 10px;
+      padding: 16px;
       background-color: white;
       color: #2a3d3d;
-      border-bottom: 2px solid #ccc;
+      border-bottom: 2px solid #ddd;
     }
     #cy {
       flex-grow: 1;
       width: 100%;
       height: 100%;
-      padding: 20px;
+      padding: 30px;
       box-sizing: border-box;
     }
     .tooltip {
@@ -49,7 +49,6 @@
   <div id="title">載入中...</div>
   <div id="cy"></div>
   <div class="tooltip" id="tooltip"></div>
-
   <script>
     function getQueryParam(name) {
       const urlParams = new URLSearchParams(window.location.search);
@@ -68,36 +67,36 @@
       }
 
       try {
-        let response = await fetch(`${API_BASE_URL}/story-graph/${storyLineId}`);
+        let response = await fetch(`${API_BASE_URL}/${storyLineId}`);
         if (!response.ok) {
           throw new Error(`HTTP error! 狀態碼: ${response.status}`);
         }
         let data = await response.json();
 
         if (data.storyLine) {
-          document.getElementById("title").innerText = `${data.storyLine.pipeline_id} - ${data.storyLine.story_line_id} - ${data.storyLine.title}`;
+          document.getElementById("title").innerText = `${data.storyLine.title}`;
         } else {
           document.getElementById("title").innerText = "❌ 劇情線不存在";
           return;
         }
 
-        let elements = data.elements.map(node => ({
+        let nodes = data.elements.filter(el => !el.data.source && !el.data.target).map(node => ({
           data: {
             id: node.data.id,
-            node_label: `${node.data.index}\n${node.data.name.length > 12 ? node.data.name.substring(0, 12) + "..." : node.data.name}`,
+            label: `${node.data.name.length > 12 ? node.data.name.substring(0, 12) + "..." : node.data.name}`,
             description: node.data.description
           }
-        })).concat(
-          data.elements
-            .filter(node => node.data.source && node.data.target)
-            .map(edge => ({
-              data: {
-                id: edge.data.id,
-                source: edge.data.source,
-                target: edge.data.target
-              }
-            }))
-        );
+        }));
+
+        let edges = data.elements.filter(el => el.data.source && el.data.target).map(edge => ({
+          data: {
+            id: edge.data.id,
+            source: edge.data.source,
+            target: edge.data.target
+          }
+        }));
+
+        let elements = nodes.concat(edges);
 
         let cy = cytoscape({
           container: document.getElementById("cy"),
@@ -118,7 +117,7 @@
                 "font-size": "14px",
                 "font-weight": "bold",
                 "text-wrap": "wrap",
-                "label": "data(node_label)"
+                "label": "data(label)"
               }
             },
             {
@@ -135,9 +134,9 @@
           layout: {
             name: "dagre",
             rankDir: "LR",
-            nodeSep: 200,
-            edgeSep: 100,
-            rankSep: 150
+            nodeSep: 150,
+            edgeSep: 80,
+            rankSep: 120
           },
           userPanningEnabled: false,
           userZoomingEnabled: false,
@@ -157,12 +156,9 @@
           if (description) {
             tooltip.innerText = description;
             tooltip.style.display = "block";
+            tooltip.style.left = event.renderedPosition.x + "px";
+            tooltip.style.top = event.renderedPosition.y + "px";
           }
-        });
-
-        cy.on("mousemove", function (event) {
-          tooltip.style.left = event.originalEvent.clientX + 10 + "px";
-          tooltip.style.top = event.originalEvent.clientY + 10 + "px";
         });
 
         cy.on("mouseout", "node", function () {
@@ -177,7 +173,6 @@
         resizeGraph();
 
       } catch (error) {
-        console.error("❌ API 讀取失敗", error);
         document.getElementById("title").innerText = "❌ 無法載入劇情線";
       }
     }

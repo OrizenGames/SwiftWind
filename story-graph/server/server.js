@@ -49,83 +49,68 @@ client
     process.exit(1);
   });
 
-function validateRequest(req, res, next) {
-  const referer = req.headers.referer || req.headers.origin;
-  if (!referer || !allowedOrigins.some(origin => referer.startsWith(origin))) {
-    console.warn(`Unauthorized request from origin: ${referer}`);
-    return res.status(403).json({ error: "Unauthorized access" });
-  }
-  next();
-}
-
-app.get("/story-graph/:story_line_id", validateRequest, async (req, res) => {
+app.get("/story-graph/:story_line_id", async (req, res) => {
   try {
     const storyLineId = req.params.story_line_id.trim();
 
     if (!storyLineId || storyLineId.length > 255) {
-      console.warn(`Invalid story_line_id: ${storyLineId}`);
-      return res.status(400).json({ error: "Invalid story_line_id" });
+      return res.status(400).json({ error: "Invalid story_line_id." });
     }
 
-    console.log(`API request: /story-graph/${storyLineId}`);
-
-    const storyLineQueryText = "SELECT * FROM side_story_lines WHERE story_line_id = $1";
-    console.log(`Executing SQL query: ${storyLineQueryText}, Params: ${storyLineId}`);
-
+    const storyLineQueryText = "SELECT * FROM story_lines WHERE story_line_id = $1";
     const storyLineQuery = await client.query(storyLineQueryText, [storyLineId]);
 
     if (storyLineQuery.rows.length === 0) {
-      console.warn(`Storyline not found: ${storyLineId}`);
       return res.status(404).json({ error: "Storyline not found" });
     }
 
-    const nodesQueryText = "SELECT * FROM side_story_nodes WHERE side_story_ids = $1";
-    console.log(`Executing SQL query: ${nodesQueryText}, Params: ${storyLineId}`);
-
-    const nodesQuery = await client.query(nodesQueryText, [storyLineId]);
-
-    console.log(`Found ${nodesQuery.rows.length} nodes`);
+    const startNodeId = storyLineQuery.rows[0].fk_story_lines_start_node_id_story_nodes;
 
     let elements = [];
+    let queue = [startNodeId];
+    let visited = new Set();
 
-    nodesQuery.rows.forEach((node, index) => {
-      console.log(`Processing node: ${node.store_node_id} - ${node.title}`);
+    while (queue.length > 0) {
+      let nodeId = queue.shift();
+      if (visited.has(nodeId)) continue;
+      visited.add(nodeId);
+
+      const nodeQueryText = "SELECT * FROM story_nodes WHERE id = $1";
+      const nodeQuery = await client.query(nodeQueryText, [nodeId]);
+
+      if (nodeQuery.rows.length === 0) continue;
+      const node = nodeQuery.rows[0];
 
       elements.push({
         data: {
-          id: `N${node.store_node_id}`,
-          index: index + 1,
+          id: `N${node.id}`,
           name: node.title,
           description: node.description
         }
       });
 
-      if (node.f_m0kx8faa6ej) {
-        console.log(`Creating edge: ${node.store_node_id} -> ${node.f_m0kx8faa6ej}`);
-
+      if (node.next_node_id) {
         elements.push({
           data: {
-            id: `E${node.store_node_id}-${node.f_m0kx8faa6ej}`,
-            source: `N${node.store_node_id}`,
-            target: `N${node.f_m0kx8faa6ej}`
+            id: `E${node.id}-${node.next_node_id}`,
+            source: `N${node.id}`,
+            target: `N${node.next_node_id}`
           }
         });
+        queue.push(node.next_node_id);
       }
-    });
+    }
 
     const responsePayload = {
       storyLine: {
-        pipeline_id: storyLineQuery.rows[0].f_g3az5f1c5tu,
         story_line_id: storyLineQuery.rows[0].story_line_id,
         title: storyLineQuery.rows[0].title
       },
       elements
     };
 
-    console.log("Returning JSON response");
     res.json(responsePayload);
   } catch (error) {
-    console.error("Query execution error:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
